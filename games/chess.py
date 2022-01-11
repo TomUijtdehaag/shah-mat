@@ -3,6 +3,7 @@ import os
 
 import numpy
 import torch
+import chess
 
 from .abstract_game import AbstractGame
 
@@ -17,8 +18,8 @@ class MuZeroConfig:
 
 
         ### Game
-        self.observation_shape = (3, 3, 3)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
-        self.action_space = list(range(9))  # Fixed list of all possible actions. You should only edit the length
+        self.observation_shape = (8, 8, 73)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
+        self.action_space = list(range(4672))  # Fixed list of all possible actions. You should only edit the length
         self.players = list(range(2))  # List of players. You should only edit the length
         self.stacked_observations = 0  # Number of previous observations and previous actions to add to the current observation
 
@@ -74,7 +75,7 @@ class MuZeroConfig:
         ### Training
         self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../results", os.path.basename(__file__)[:-3], datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))  # Path to store the model weights and TensorBoard logs
         self.save_model = True  # Save the checkpoint in results_path as model.checkpoint
-        self.training_steps = 10000  # Total number of training steps (ie weights update according to a batch)
+        self.training_steps = 1000000  # Total number of training steps (ie weights update according to a batch)
         self.batch_size = 64  # Number of parts of games to train on at each training step
         self.checkpoint_interval = 10  # Number of training steps before using the model for self-playing
         self.value_loss_weight = 0.25  # Scale the value loss to avoid overfitting of the value function, paper recommends 0.25 (See paper appendix Reanalyze)
@@ -127,7 +128,7 @@ class Game(AbstractGame):
     """
 
     def __init__(self, seed=None):
-        self.env = TicTacToe()
+        self.env = Chess()
 
     def step(self, action):
         """
@@ -238,6 +239,35 @@ class Game(AbstractGame):
         col = action_number % 3 + 1
         return f"Play row {row}, column {col}"
 
+class Chess:
+    def __init__(self):
+        self.board = chess.Board()
+        self.player = 1
+    
+    def to_play(self):
+        return int(not self.player)
+
+    def reset(self):
+        self.board = chess.Board()
+        self.player = 1
+        return self.get_observation()
+
+    def step(self, move: chess.Move):
+        self.board.push(move)
+
+        done = self.board.is_game_over()
+
+        #### TO BE FINISHED
+        reward = None
+
+    def get_observation(self):
+        pass
+
+    def have_outcome(self):
+        return True if self.board.outcome() else False
+
+
+    
 
 class TicTacToe:
     def __init__(self):
