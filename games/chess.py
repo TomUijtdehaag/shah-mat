@@ -1,12 +1,12 @@
+from collections import deque
 import datetime
 import os
 
-import numpy
+import numpy as np
 import torch
 import chess
 
 from .abstract_game import AbstractGame
-
 
 class MuZeroConfig:
     def __init__(self):
@@ -18,27 +18,27 @@ class MuZeroConfig:
 
 
         ### Game
-        self.observation_shape = (8, 8, 73)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
-        self.action_space = list(range(4672))  # Fixed list of all possible actions. You should only edit the length
+        self.observation_shape = (19, 8, 8)  # Dimensions of the game observation, must be 3D (channel, height, width). For a 1D array, please reshape it to (1, 1, length of array)
+        self.action_space = list(range(len(POLICY_UCI)))  # Fixed list of all possible actions. You should only edit the length
         self.players = list(range(2))  # List of players. You should only edit the length
-        self.stacked_observations = 0  # Number of previous observations and previous actions to add to the current observation
+        self.stacked_observations = 8  # Number of previous observations and previous actions to add to the current observation
 
         # Evaluate
         self.muzero_player = 0  # Turn Muzero begins to play (0: MuZero plays first, 1: MuZero plays second)
-        self.opponent = "expert"  # Hard coded agent that MuZero faces to assess his progress in multiplayer games. It doesn't influence training. None, "random" or "expert" if implemented in the Game class
+        self.opponent = "random"  # Hard coded agent that MuZero faces to assess his progress in multiplayer games. It doesn't influence training. None, "random" or "expert" if implemented in the Game class
 
 
 
         ### Self-Play
-        self.num_workers = 1  # Number of simultaneous threads/workers self-playing to feed the replay buffer
+        self.num_workers = 10  # Number of simultaneous threads/workers self-playing to feed the replay buffer
         self.selfplay_on_gpu = False
-        self.max_moves = 9  # Maximum number of moves if game is not finished before
-        self.num_simulations = 25  # Number of future moves self-simulated
+        self.max_moves = 500  # Maximum number of moves if game is not finished before
+        self.num_simulations = 5  # Number of future moves self-simulated
         self.discount = 1  # Chronological discount of the reward
         self.temperature_threshold = None  # Number of moves before dropping the temperature given by visit_softmax_temperature_fn to 0 (ie selecting the best action). If None, visit_softmax_temperature_fn is used every time
 
         # Root prior exploration noise
-        self.root_dirichlet_alpha = 0.1
+        self.root_dirichlet_alpha = 0.3
         self.root_exploration_fraction = 0.25
 
         # UCB formula
@@ -53,14 +53,14 @@ class MuZeroConfig:
 
         # Residual Network
         self.downsample = False  # Downsample observations before representation network, False / "CNN" (lighter) / "resnet" (See paper appendix Network Architecture)
-        self.blocks = 1  # Number of blocks in the ResNet
-        self.channels = 16  # Number of channels in the ResNet
-        self.reduced_channels_reward = 16  # Number of channels in reward head
-        self.reduced_channels_value = 16  # Number of channels in value head
-        self.reduced_channels_policy = 16  # Number of channels in policy head
-        self.resnet_fc_reward_layers = [8]  # Define the hidden layers in the reward head of the dynamic network
-        self.resnet_fc_value_layers = [8]  # Define the hidden layers in the value head of the prediction network
-        self.resnet_fc_policy_layers = [8]  # Define the hidden layers in the policy head of the prediction network
+        self.blocks = 20  # Number of blocks in the ResNet
+        self.channels = 64  # Number of channels in the ResNet
+        self.reduced_channels_reward = 32  # Number of channels in reward head
+        self.reduced_channels_value = 32  # Number of channels in value head
+        self.reduced_channels_policy = 32  # Number of channels in policy head
+        self.resnet_fc_reward_layers = [16]  # Define the hidden layers in the reward head of the dynamic network
+        self.resnet_fc_value_layers = [16]  # Define the hidden layers in the value head of the prediction network
+        self.resnet_fc_policy_layers = [16]  # Define the hidden layers in the policy head of the prediction network
 
         # Fully Connected Network
         self.encoding_size = 32
@@ -75,8 +75,8 @@ class MuZeroConfig:
         ### Training
         self.results_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../results", os.path.basename(__file__)[:-3], datetime.datetime.now().strftime("%Y-%m-%d--%H-%M-%S"))  # Path to store the model weights and TensorBoard logs
         self.save_model = True  # Save the checkpoint in results_path as model.checkpoint
-        self.training_steps = 1000000  # Total number of training steps (ie weights update according to a batch)
-        self.batch_size = 64  # Number of parts of games to train on at each training step
+        self.training_steps = 1e5  # Total number of training steps (ie weights update according to a batch)
+        self.batch_size = 128  # Number of parts of games to train on at each training step
         self.checkpoint_interval = 10  # Number of training steps before using the model for self-playing
         self.value_loss_weight = 0.25  # Scale the value loss to avoid overfitting of the value function, paper recommends 0.25 (See paper appendix Reanalyze)
         self.train_on_gpu = torch.cuda.is_available()  # Train on GPU if available
@@ -86,9 +86,9 @@ class MuZeroConfig:
         self.momentum = 0.9  # Used only if optimizer is SGD
 
         # Exponential learning rate schedule
-        self.lr_init = 0.003  # Initial learning rate
-        self.lr_decay_rate = 1  # Set it to 1 to use a constant learning rate
-        self.lr_decay_steps = 10000
+        self.lr_init = 0.2  # Initial learning rate
+        self.lr_decay_rate = .1  # Set it to 1 to use a constant learning rate
+        self.lr_decay_steps = 1000
 
 
 
@@ -191,29 +191,16 @@ class Game(AbstractGame):
         """
         while True:
             try:
-                row = int(
-                    input(
-                        f"Enter the row (1, 2 or 3) to play for the player {self.to_play()}: "
-                    )
-                )
-                col = int(
-                    input(
-                        f"Enter the column (1, 2 or 3) to play for the player {self.to_play()}: "
-                    )
-                )
-                choice = (row - 1) * 3 + (col - 1)
-                if (
-                    choice in self.legal_actions()
-                    and 1 <= row
-                    and 1 <= col
-                    and row <= 3
-                    and col <= 3
-                ):
+                action = UCI_TO_POLICY[str(
+                    input("Enter your move in uci format")
+                )]
+                
+                if action in self.legal_actions():
                     break
             except:
                 pass
-            print("Wrong input, try again")
-        return choice
+            print("Not a legal move, try again")
+        return action
 
     def expert_agent(self):
         """
@@ -225,7 +212,7 @@ class Game(AbstractGame):
         """
         return self.env.expert_action()
 
-    def action_to_string(self, action_number):
+    def action_to_string(self, uci_move):
         """
         Convert an action number to a string representing the action.
         
@@ -235,12 +222,10 @@ class Game(AbstractGame):
         Returns:
             String representing the action.
         """
-        row = action_number // 3 + 1
-        col = action_number % 3 + 1
-        return f"Play row {row}, column {col}"
+        return f"Play {uci_move}"
 
 class Chess:
-    def __init__(self):
+    def __init__(self, history_size: int = 8):
         self.board = chess.Board()
         self.player = 1
     
@@ -252,129 +237,153 @@ class Chess:
         self.player = 1
         return self.get_observation()
 
-    def step(self, move: chess.Move):
-        self.board.push(move)
+    def step(self, action: int):
+
+        self.board.push_uci(POLICY_UCI[int(action)])
 
         done = self.board.is_game_over()
 
-        #### TO BE FINISHED
-        reward = None
+        reward = self.get_reward()
 
-    def get_observation(self):
-        pass
-
-    def have_outcome(self):
-        return True if self.board.outcome() else False
-
-
-    
-
-class TicTacToe:
-    def __init__(self):
-        self.board = numpy.zeros((3, 3), dtype="int32")
-        self.player = 1
-
-    def to_play(self):
-        return 0 if self.player == 1 else 1
-
-    def reset(self):
-        self.board = numpy.zeros((3, 3), dtype="int32")
-        self.player = 1
-        return self.get_observation()
-
-    def step(self, action):
-        row = action // 3
-        col = action % 3
-        self.board[row, col] = self.player
-
-        done = self.have_winner() or len(self.legal_actions()) == 0
-
-        reward = 1 if self.have_winner() else 0
-
-        self.player *= -1
+        self.player = 1 - self.player
+        self.board.apply_mirror()
 
         return self.get_observation(), reward, done
 
+    def get_reward(self):
+        outcome = self.board.outcome()
+        if outcome:
+            result = outcome.result()
+
+            if result == '1-0':
+                return 1
+            if result == '0-1':
+                return -1
+            else:
+                return 0
+
+        else:
+            return 0
+
     def get_observation(self):
-        board_player1 = numpy.where(self.board == 1, 1, 0)
-        board_player2 = numpy.where(self.board == -1, 1, 0)
-        board_to_play = numpy.full((3, 3), self.player)
-        return numpy.array([board_player1, board_player2, board_to_play], dtype="int32")
+        return board_to_planes(self.board, self.player)
 
     def legal_actions(self):
-        legal = []
-        for i in range(9):
-            row = i // 3
-            col = i % 3
-            if self.board[row, col] == 0:
-                legal.append(i)
-        return legal
-
-    def have_winner(self):
-        # Horizontal and vertical checks
-        for i in range(3):
-            if (self.board[i, :] == self.player * numpy.ones(3, dtype="int32")).all():
-                return True
-            if (self.board[:, i] == self.player * numpy.ones(3, dtype="int32")).all():
-                return True
-
-        # Diagonal checks
-        if (
-            self.board[0, 0] == self.player
-            and self.board[1, 1] == self.player
-            and self.board[2, 2] == self.player
-        ):
-            return True
-        if (
-            self.board[2, 0] == self.player
-            and self.board[1, 1] == self.player
-            and self.board[0, 2] == self.player
-        ):
-            return True
-
-        return False
+        return [UCI_TO_POLICY[move.uci()] for move in self.board.legal_moves]
 
     def expert_action(self):
-        board = self.board
-        action = numpy.random.choice(self.legal_actions())
-        # Horizontal and vertical checks
-        for i in range(3):
-            if abs(sum(board[i, :])) == 2:
-                ind = numpy.where(board[i, :] == 0)[0][0]
-                action = numpy.ravel_multi_index(
-                    (numpy.array([i]), numpy.array([ind])), (3, 3)
-                )[0]
-                if self.player * sum(board[i, :]) > 0:
-                    return action
+        return UCI_TO_POLICY[np.random.choice(list(self.board.legal_moves)).uci()]
 
-            if abs(sum(board[:, i])) == 2:
-                ind = numpy.where(board[:, i] == 0)[0][0]
-                action = numpy.ravel_multi_index(
-                    (numpy.array([ind]), numpy.array([i])), (3, 3)
-                )[0]
-                if self.player * sum(board[:, i]) > 0:
-                    return action
-
-        # Diagonal checks
-        diag = board.diagonal()
-        anti_diag = numpy.fliplr(board).diagonal()
-        if abs(sum(diag)) == 2:
-            ind = numpy.where(diag == 0)[0][0]
-            action = numpy.ravel_multi_index(
-                (numpy.array([ind]), numpy.array([ind])), (3, 3)
-            )[0]
-            if self.player * sum(diag) > 0:
-                return action
-
-        if abs(sum(anti_diag)) == 2:
-            ind = numpy.where(anti_diag == 0)[0][0]
-            action = numpy.ravel_multi_index(
-                (numpy.array([ind]), numpy.array([2 - ind])), (3, 3)
-            )[0]
-            if self.player * sum(anti_diag) > 0:
-                return action
-
-        return action
+    def have_outcome(self):
+        return True if self.board.is_game_over() else False
 
     def render(self):
-        print(self.board[::-1])
+        print(self.board)
+
+def board_to_planes(board, to_play):
+    board_fen, _, castling_rights, _, half_moves, full_moves = board.fen().split(" ")
+    piece_planes = get_piece_planes(board_fen)
+    special_planes = get_special_planes(castling_rights, to_play, half_moves, full_moves)
+        
+    return np.concatenate([piece_planes, special_planes])
+
+def get_piece_planes(board_fen):
+    pieces = "KQBNRPkqbnrp"
+    fen = replace_empty_squares(board_fen)
+    
+    fen = fen.replace("/", "")
+    fen = np.array(list(fen)).reshape((8,8))
+    planes = np.zeros((12,8,8))
+    for i, piece in enumerate(pieces):
+        planes[i][np.where(fen == piece)] = 1
+        
+    return planes
+
+def get_special_planes(castling_rights, to_play, half_moves, full_moves):
+    planes = []
+    
+    # castling rights
+    for right in "KQkq":
+        planes.append(np.full((8,8), int(right in castling_rights)))
+        
+    # half moves
+    planes.append(np.full((8,8), int(half_moves)))
+    
+    # full moves
+    planes.append(np.full((8,8), int(full_moves)))
+    
+    # player color
+    planes.append(np.full((8,8), to_play))
+    
+    planes = np.array(planes)
+    
+    return planes
+
+def replace_empty_squares(board_fen: str):
+    for i in range(1,9):
+        board_fen = board_fen.replace(str(i), i*"0")
+        
+    return board_fen
+
+def empty_planes(planes: np.ndarray):
+    return np.zeros(planes.shape)
+
+def get_move_to_index():
+    codes, i = {}, 0
+    directions = np.array([[0,1], [1,1], [1,0], [1,-1], [0,-1], [-1,-1], [-1,0], [-1,1]])
+
+    for direction in directions:
+        for squares in range(1,8):
+            codes[tuple(list(squares * direction) + [None])] = i
+            i += 1
+
+    for two in [2, -2]:
+        for one in [1, -1]:
+            codes[(two, one, None)], i = i, i+1
+
+    for two in [2, -2]:
+        for one in [1,-1]:
+            codes[(one, two, None)], i = i, i+1
+
+    for move in [[0,1],[1,1],[-1,1]]:
+        for promote_to in ["q", "r", "n", "b"]:
+            codes[tuple(move + [promote_to])] , i = i , i + 1
+            
+    return codes
+
+def get_policy_uci():
+    index_to_file = dict(enumerate("abcdefgh"))
+    file_to_index = {v:k for k,v in index_to_file.items()}
+    assert len(index_to_file) == len(file_to_index)
+
+    index_to_rank = dict(enumerate(range(1,9)))
+    rank_to_index = {v:k for k,v in index_to_rank.items()}
+    assert len(index_to_rank) == len(rank_to_index)
+
+    move_to_index = get_move_to_index()
+    index_to_move = {v:k for k,v in move_to_index.items()}
+    assert len(move_to_index) == len(index_to_move)
+
+    policy_uci = np.zeros((8,8,len(move_to_index)), object)
+
+    for file in range(8):
+        for rank in range(8):
+            for move_index, move in index_to_move.items():            
+                to_file = file + move[0]
+                to_rank = rank + move[1]
+                
+                promotion = move[2] if move[2] else ''
+                
+                uci_move = \
+                    index_to_file[file] + str(index_to_rank[rank]) + \
+                    index_to_file.get(to_file, '_') + str(index_to_rank.get(to_rank, '_')) + \
+                    promotion
+                
+                policy_uci[file][rank][move_index] = uci_move
+
+    policy_uci = policy_uci.flatten()
+
+    return policy_uci
+
+POLICY_UCI = get_policy_uci()
+UCI_TO_POLICY = {v:k for k,v in enumerate(POLICY_UCI.flatten()) if '_' not in v} 

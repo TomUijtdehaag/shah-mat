@@ -334,12 +334,12 @@ class Reanalyse:
 
             # Use the last model to provide a fresher, stable n-step value (See paper appendix Reanalyze)
             if self.config.use_last_model_value:
-                observations = [
+                observations = numpy.array([
                     game_history.get_stacked_observations(
                         i, self.config.stacked_observations
                     )
                     for i in range(len(game_history.root_values))
-                ]
+                ])
 
                 observations = (
                     torch.tensor(observations)

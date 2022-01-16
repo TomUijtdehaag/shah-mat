@@ -136,6 +136,9 @@ class Trainer:
             gradient_scale_batch,
         ) = batch
 
+        # Convert Observation batch to np.array
+        observation_batch = numpy.array(observation_batch)
+
         # Keep values as scalars for calculating the priorities for the prioritized replay
         target_value_scalar = numpy.array(target_value, dtype="float32")
         priorities = numpy.zeros_like(target_value_scalar)
